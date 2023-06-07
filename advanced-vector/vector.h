@@ -16,9 +16,6 @@ public:
     using iterator = T*;
     using const_iterator = const T*;
 
-    /**
-     * Конструктор по умолчанию
-    */
     Vector() noexcept;
     explicit Vector(size_t size);
     Vector(const Vector& other);
