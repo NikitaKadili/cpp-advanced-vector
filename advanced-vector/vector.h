@@ -61,7 +61,7 @@ private:
     RawMemory<T> data_; // Объект управления сырой памятью вектора
     size_t size_ = 0; // Размер вектор
 
-    void MoveElements(T* from, size_t size, T* to);
+    static void MoveElements(T* from, size_t size, T* to);
 };
 
 /**
@@ -120,23 +120,22 @@ Vector<T>& Vector<T>::operator=(const Vector& other) {
     }
     // Иначе - копируем элементы из rhs, создаем при необходимости новые
     // или удаляем старые
-    else {
-        for (size_t i = 0; i < std::min(size_, other.size_); ++i) {
-            data_[i] = other[i];
-        }
-        // Если текущий размер меньше копируемого - создаем новые элементы
-        if (size_ < other.size_) {
-            std::uninitialized_copy_n(
-                other.data_.GetAddress() + size_,
-                other.size_ - size_,
-                data_.GetAddress() + size_
-            );
-        }
-        // Иначе - удаляем лишние
-        else {
-            std::destroy_n(data_.GetAddress() + size_, size_ - other.size_);
-        }
+    for (size_t i = 0; i < std::min(size_, other.size_); ++i) {
+        data_[i] = other[i];
     }
+    // Если текущий размер меньше копируемого - создаем новые элементы
+    if (size_ < other.size_) {
+        std::uninitialized_copy_n(
+            other.data_.GetAddress() + size_,
+            other.size_ - size_,
+            data_.GetAddress() + size_
+        );
+    }
+    // Иначе - удаляем лишние
+    else {
+        std::destroy_n(data_.GetAddress() + size_, size_ - other.size_);
+    }
+    
     // Обновляем размер вектора
     size_ = other.size_;
 
@@ -219,7 +218,16 @@ T& Vector<T>::EmplaceBack(Types&&... args) {
         RawMemory<T> new_data(size_ == 0 ? 1 : size_ * 2);
         
         new(new_data + size_) T(std::forward<Types>(args)...);
-        MoveElements(data_.GetAddress(), size_, new_data.GetAddress());
+        // Перемещаем элементы вектора на новый участок
+        try {
+            MoveElements(data_.GetAddress(), size_, new_data.GetAddress());
+        }
+        catch (...) {
+            // В случае выбрасывания исключения методом MoveElements
+            // вызываем деструктор у созданного ранее нового элемента
+            std::destroy_at(new_data + size_);
+            throw;
+        }
         data_.Swap(new_data);
     }
 
@@ -252,6 +260,8 @@ typename Vector<T>::iterator Vector<T>::Insert(const_iterator pos, ValueType&& v
 template <typename T>
 template <typename... Types>
 typename Vector<T>::iterator Vector<T>::Emplace(const_iterator pos, Types&&... args) {
+    assert((0 <= pos - begin()) && (static_cast<size_t>(pos - begin()) <= size_));
+
     // Если итератор указывает на конец - вызовем метод EmplaceBack
     if (pos == end()) {
         EmplaceBack(std::forward<Types>(args)...);
@@ -314,7 +324,7 @@ void Vector<T>::PopBack() noexcept {
 */
 template <typename T>
 typename Vector<T>::iterator Vector<T>::Erase(const_iterator pos) {
-    assert(size_ > 0);
+    assert((0 <= pos - begin()) && (static_cast<size_t>(pos - begin()) <= size_));
 
     size_t index = pos - begin();
     // Сдвигаем элементы из диапозона [index + 1, end()) на один элемент влево
@@ -345,7 +355,7 @@ size_t Vector<T>::Capacity() const noexcept {
 */
 template <typename T>
 const T& Vector<T>::operator[](size_t index) const noexcept {
-    // return const_cast<Vector&>(*this)[index];
+    assert(index < size_);
     return data_[index];
 }
 /**
@@ -353,7 +363,7 @@ const T& Vector<T>::operator[](size_t index) const noexcept {
 */
 template <typename T>
 T& Vector<T>::operator[](size_t index) noexcept {
-    // assert(index < size_);
+    assert(index < size_);
     return data_[index];
 }
 
@@ -450,8 +460,12 @@ public:
 
     RawMemory& operator=(const RawMemory& other) = delete;
     RawMemory& operator=(RawMemory&& other) {
+        if (buffer_ != nullptr) {
+            Deallocate(buffer_);
+        }
+
         buffer_ = std::move(other.buffer_);
-        capacity_ = std::move(other.capacity_);
+        capacity_ = other.capacity_;
 
         other.buffer_ = nullptr;
         other.capacity_ = 0;
